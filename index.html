@@ -1093,10 +1093,28 @@ const DEFAULT = {
   pairs: null
 };
 let S, showPairs = false, links = [];
-const save = () => store.set(ADMIN_KEY, S);
+let urlT = null;
+function save(){
+  S.t = Date.now();
+  store.set(ADMIN_KEY, S);
+  clearTimeout(urlT);
+  urlT = setTimeout(() => {
+    try { history.replaceState(null, '', location.pathname + '?maitre=' + encode(S)); } catch(e){}
+  }, 400);
+}
+function storageWorks(){
+  try { localStorage.setItem('ss-test', '1'); localStorage.removeItem('ss-test'); return true; } catch(e){ return false; }
+}
 
 function loadAdmin(){
   let s = store.get(ADMIN_KEY);
+  const fromUrl = new URLSearchParams(location.search).get('maitre');
+  if (fromUrl){
+    try {
+      const u = decode(fromUrl);
+      if (u && u.people && (!s || (u.t || 0) >= (s.t || 0))) s = u;
+    } catch(e){}
+  }
   if (!s){
     s = JSON.parse(JSON.stringify(DEFAULT));
   }
@@ -1117,8 +1135,9 @@ function startAdmin(){
   <div class="hero">
     <div class="kicker light">Quartier général du maître du tirage</div>
     <div class="fancy">${fancyTitle(c.year)}</div>
-    <p class="light">Ici on prépare les parchemins, à l'abri des regards. Les données restent dans ce navigateur.</p>
+    <p class="light">Ici on prépare les parchemins, à l'abri des regards. Tout est enregistré automatiquement.</p>
   </div>
+  ${!storageWorks() ? `<div class="warn">Ton navigateur bloque la mémoire du site (navigation privée ou appli qui ouvre les liens en interne). Pas grave : après le tirage, utilise le bouton « Copier le lien de mon QG » et garde ce lien, c'est lui qui retient tout.</div>` : ''}
   ${local ? `<div class="warn">Tu ouvres le fichier en local : les liens pointeraient vers ton PC et ne marcheraient que chez toi. Mets la page sur GitHub Pages et fais le tirage depuis l'adresse en ligne (avec ?maitre à la fin).</div>` : ''}
   <section class="card">
     <h2>Mode d'emploi</h2>
@@ -1126,6 +1145,7 @@ function startAdmin(){
       <li>Vérifie les paramètres et remplis la besace de chaque courageux : infos secrètes, idées, liens Amazon.</li>
       <li>Clique sur « Lancer le tirage ». C'est ton navigateur qui mélange au hasard, en respectant les couples et l'an dernier.</li>
       <li>Copie le lien de chaque personne et envoie-le lui en privé, sans rien d'autre. Toute l'annonce (nom tiré, idées, règles, bonne chance) est dans la page qui s'ouvre.</li>
+      <li>Le tirage est gardé en mémoire : en revenant ici, tu retrouves les mêmes liens. Par sécurité, copie aussi « le lien de mon QG » dans tes notes, il contient tout et marche sur n'importe quel appareil.</li>
       <li>Ne donne jamais l'adresse de cette page (celle avec ?maitre).</li>
     </ol>
   </section>
@@ -1193,7 +1213,11 @@ function startAdmin(){
     save(); renderPeople(); renderResults();
   });
   $('#addP').onclick = () => { S.people.push({name:'', alias:'', group:'', last:'', notes:'', ideas:[]}); save(); renderPeople(); };
-  $('#drawBtn').onclick = draw;
+  $('#drawBtn').onclick = () => {
+    if (S.pairs){ $('#results').scrollIntoView({behavior:'smooth'}); return; }
+    draw();
+  };
+  updateDrawBtn();
 }
 
 function renderPeople(){
@@ -1240,6 +1264,11 @@ function shuffle(a){
   return a;
 }
 
+function updateDrawBtn(){
+  const b = $('#drawBtn'); if (!b) return;
+  b.textContent = S.pairs ? '✅ Tirage déjà fait, voir les liens' : '🥁 Lancer le tirage';
+}
+
 function draw(){
   const msg = $('#drawMsg');
   const P = S.people.filter(p => p.name.trim());
@@ -1260,7 +1289,7 @@ function draw(){
     }
     if (good){
       S.pairs = P.map((p, i) => [p.name.trim(), P[perm[i]].name.trim()]);
-      save(); showPairs = false;
+      save(); showPairs = false; updateDrawBtn();
       msg.textContent = 'Tirage effectué ! Les parchemins sont prêts juste en dessous.';
       renderResults(); confetti(); drumroll();
       $('#results').scrollIntoView({behavior:'smooth'});
@@ -1311,7 +1340,24 @@ function renderResults(){
           <a class="btn ghost small" href="${esc(x.link)}" target="_blank" rel="noopener">Tester</a>
           <span class="flash" id="fl${k}"></span>
         </div>
-      </div>`).join('')}`;
+      </div>`).join('')}
+    <div class="res" style="display:block">
+      <p class="hint"><b>Sauvegarde :</b> ce lien contient tout ton QG (tirage, besaces, paramètres). Garde-le dans tes notes : en l'ouvrant, même sur un autre téléphone, tu retrouves exactement les mêmes liens. Ne le donne à personne.</p>
+      <div class="res-actions">
+        <button class="btn gold small" id="copyQG">Copier le lien de mon QG</button>
+        <span class="flash" id="flQG"></span>
+      </div>
+    </div>
+    <div class="res" style="display:block">
+      <p class="hint">En cas de vrai problème uniquement : refaire le tirage change tous les liens, il faudra les renvoyer à tout le monde.</p>
+      <button class="btn ghost small" id="redraw">🔄 Relancer le tirage</button>
+    </div>`;
+  $('#copyQG').onclick = async () => {
+    const ok = await copyText(location.origin + location.pathname + '?maitre=' + encode(S));
+    $('#flQG').textContent = ok ? 'Lien du QG copié' : 'Copie impossible';
+    setTimeout(() => $('#flQG').textContent = '', 2000);
+  };
+  $('#redraw').onclick = draw;
 
   $('#showPairs').onchange = e => { showPairs = e.target.checked; $$('.secret', R).forEach(s => s.classList.toggle('blur', !showPairs)); };
   $$('[data-act]', R).forEach(btn => btn.onclick = async () => {
