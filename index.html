@@ -523,7 +523,7 @@ const LOADING = [
    MODE RÉVÉLATION (le lien envoyé à chaque personne)
    ========================================================= */
 let D = null;
-const seenKey = () => 'ss-seen-' + location.hash.slice(-24);
+const seenKey = () => 'ss-seen-' + (location.search + location.hash).slice(-24);
 
 function startReveal(data){
   D = data;
@@ -893,7 +893,7 @@ function showManant(){
    MODE QG (réservé au maître du tirage : ?maitre)
    ========================================================= */
 const ADMIN_KEY = 'ss-admin-v3';
-const DEFAULT = {
+const DEFAULT = /*DATA*/{
   cfg: {
     year: 2026, budget: 50, date: '2026-12-24', place: 'Chez Mine !', master: 'Sam', phone: '',
     blessing: 'Que ta quête soit sinueuse, gargouillesque et farfouilleuse, et que ton esprit demeure vif, lustré et délicieusement inopportun. Bonne recherche, noble lutin.',
@@ -1091,7 +1091,7 @@ const DEFAULT = {
     }
   ],
   pairs: null
-};
+}/*ENDDATA*/;
 let S, showPairs = false, links = [];
 let urlT = null;
 function save(){
@@ -1144,7 +1144,7 @@ function startAdmin(){
     <ol class="steps-help">
       <li>Vérifie les paramètres et remplis la besace de chaque courageux : infos secrètes, idées, liens Amazon.</li>
       <li>Clique sur « Lancer le tirage ». C'est ton navigateur qui mélange au hasard, en respectant les couples et l'an dernier.</li>
-      <li>Copie le lien de chaque personne et envoie-le lui en privé, sans rien d'autre. Toute l'annonce (nom tiré, idées, règles, bonne chance) est dans la page qui s'ouvre.</li>
+      <li>Copie le lien de chaque personne (un lien court) et envoie-le lui en privé. Toute l'annonce (nom tiré, idées, règles, bonne chance) est dans la page qui s'ouvre.</li>
       <li>Le tirage est gardé en mémoire : en revenant ici, tu retrouves les mêmes liens. Par sécurité, copie aussi « le lien de mon QG » dans tes notes, il contient tout et marche sur n'importe quel appareil.</li>
       <li>Ne donne jamais l'adresse de cette page (celle avec ?maitre).</li>
     </ol>
@@ -1299,6 +1299,50 @@ function draw(){
   msg.textContent = 'Impossible de trouver un tirage avec ces contraintes. Assouplis les groupes, l\'an dernier ou l\'option des duos.';
 }
 
+function buildPayload(st, gName, tName, phone){
+  const c = st.cfg;
+  const ppl = st.people.filter(p => (p.name || '').trim());
+  const find = n => ppl.find(p => p.name.trim() === n);
+  const G = find(gName), T = find(tName);
+  if (!G || !T) return null;
+  return {
+    v: 1, y: c.year, b: c.budget, d: c.date, l: (c.place || '').trim(), m: (c.master || '').trim(), s: (phone || '').trim(), w: (c.blessing || '').trim(),
+    g: [G.name.trim(), (G.alias || '').trim()], t: [T.name.trim(), (T.alias || '').trim()],
+    n: (T.notes || '').split('\n').map(x => x.trim()).filter(Boolean),
+    a: (T.ideas || []).filter(x => (x.t || '').trim() || (x.u || '').trim()).map(x => [(x.t || '').trim(), cleanUrl(x.u), (x.img || '').trim(), (x.p || '').trim()]),
+    r: ppl.map(p => [p.name.trim(), (p.alias || '').trim()])
+  };
+}
+function shortCode(g, t, phone){
+  const nonce = Math.random().toString(36).slice(2, 6);
+  return encode([g, t, nonce, (phone || '').replace(/\s/g, '')].join('|'));
+}
+function dataSig(st){
+  const c = st.cfg;
+  return JSON.stringify({
+    c: [c.year, c.budget, c.date, c.place, c.master, c.blessing],
+    p: st.people.map(p => [p.name, p.alias, p.notes, (p.ideas || []).map(x => [x.t, x.u, x.img, x.p])])
+  });
+}
+async function exportFile(){
+  const fl = $('#flExp');
+  try {
+    const src = await (await fetch(location.pathname, {cache: 'no-store'})).text();
+    const a = src.indexOf('/*DATA*/'), b = src.indexOf('/*ENDDATA*/');
+    if (a < 0 || b < 0) throw new Error('marqueurs');
+    const data = JSON.parse(JSON.stringify(S));
+    data.cfg.phone = ''; data.pairs = null; delete data.t; delete data.codes;
+    const out = src.slice(0, a + 8) + JSON.stringify(data, null, 2) + src.slice(b);
+    const url = URL.createObjectURL(new Blob([out], {type: 'text/html'}));
+    const el = document.createElement('a'); el.href = url; el.download = 'index.html';
+    document.body.appendChild(el); el.click(); el.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    fl.textContent = 'Fichier téléchargé';
+  } catch(e){
+    fl.textContent = 'Téléchargement impossible ici, fais-le depuis un ordi';
+  }
+}
+
 function renderResults(){
   const R = $('#results'); if (!R) return;
   if (!S.pairs){ R.hidden = true; return; }
@@ -1308,24 +1352,22 @@ function renderResults(){
     R.innerHTML = `<h2>Les parchemins</h2><p>Tu as renommé ou retiré quelqu'un depuis le tirage. Relance-le pour régénérer les liens.</p>`;
     return;
   }
-  const c = S.cfg;
-  const roster = [...byName.values()].map(p => [p.name.trim(), p.alias.trim()]);
-  const base = location.href.split(/[?#]/)[0];
+  const base = location.origin + location.pathname;
+  S.codes = S.codes || {};
+  let changed = false;
   links = S.pairs.map(([g, t]) => {
     const G = byName.get(g), T = byName.get(t);
-    const payload = {
-      v: 1, y: c.year, b: c.budget, d: c.date, l: (c.place || '').trim(), m: (c.master || '').trim(), s: (c.phone || '').trim(), w: (c.blessing || '').trim(),
-      g: [G.name.trim(), G.alias.trim()], t: [T.name.trim(), T.alias.trim()],
-      n: T.notes.split('\n').map(x => x.trim()).filter(Boolean),
-      a: T.ideas.filter(x => (x.t || '').trim() || (x.u || '').trim()).map(x => [(x.t || '').trim(), cleanUrl(x.u), (x.img || '').trim(), (x.p || '').trim()]),
-      r: roster
-    };
-    const link = base + '#' + encode(payload);
-    return {G, T, link};
+    const key = g + '>' + t + '>' + (S.cfg.phone || '');
+    if (!S.codes[key]){ S.codes[key] = shortCode(g, t, S.cfg.phone); changed = true; }
+    return {G, T, link: base + '?c=' + S.codes[key]};
   });
+  if (changed) save();
+  const outdated = dataSig(S) !== dataSig(DEFAULT);
 
   R.innerHTML = `
     <h2>Les parchemins</h2>
+    ${outdated ? `<div class="warn"><b>Important :</b> tu as modifié des besaces ou des paramètres ici. Les pages des participants lisent les infos dans le fichier du site, donc mets-le à jour : télécharge le nouveau index.html et remplace l'ancien sur GitHub (attends 2 minutes avant de tester). Tu peux le refaire autant que tu veux, même après avoir envoyé les liens.
+      <div class="res-actions" style="margin-top:8px"><button class="btn primary small" id="exportBtn">Télécharger index.html à jour</button><span class="flash" id="flExp"></span></div></div>` : ''}
     <p class="hint">Chaque ligne = le lien perso d'une personne. Tu copies son lien et tu le colles dans votre conversation, c'est tout : en l'ouvrant, elle tombe sur la page avec la personne qu'elle doit gâter, tes idées, le mot de la fin, etc. « Tester » te montre exactement ce qu'elle verra. Si tu modifies une besace après coup, le lien change : renvoie-le.</p>
     <label class="chk"><input type="checkbox" id="showPairs" ${showPairs ? 'checked' : ''}> Afficher qui a tiré qui (le maître assume)</label>
     ${links.map((x, k) => `
@@ -1358,6 +1400,7 @@ function renderResults(){
     setTimeout(() => $('#flQG').textContent = '', 2000);
   };
   $('#redraw').onclick = draw;
+  const eb = $('#exportBtn'); if (eb) eb.onclick = exportFile;
 
   $('#showPairs').onchange = e => { showPairs = e.target.checked; $$('.secret', R).forEach(s => s.classList.toggle('blur', !showPairs)); };
   $$('[data-act]', R).forEach(btn => btn.onclick = async () => {
@@ -1376,7 +1419,14 @@ function renderResults(){
    ========================================================= */
 const h = location.hash.slice(1);
 const params = new URLSearchParams(location.search);
-if (h){
+if (params.get('c')){
+  let data = null;
+  try {
+    const [g, t, , phone] = decode(params.get('c')).split('|');
+    data = buildPayload(DEFAULT, g, t, phone);
+  } catch(e){}
+  if (data) startReveal(data); else showBroken();
+} else if (h){
   let data = null;
   try { data = decode(h); } catch(e){}
   if (data && data.v === 1 && data.g && data.t) startReveal(data); else showBroken();
